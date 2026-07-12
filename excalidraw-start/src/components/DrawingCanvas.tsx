@@ -47,9 +47,33 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
     ]
   })()
 
+  // Find sheet containing the element in URL query on initial load
+  const initialActiveSheetId = (() => {
+    if (typeof window !== 'undefined') {
+      const searchParams = new URLSearchParams(window.location.search)
+      const elementId = searchParams.get('element')
+      if (elementId) {
+        const found = initialSheets.find(s => {
+          try {
+            const elements = JSON.parse(s.elements || '[]')
+            return elements.some((el: any) => el.id === elementId)
+          } catch (e) {
+            return false
+          }
+        })
+        if (found) {
+          return found.id
+        }
+      }
+    }
+    return initialSheets[0].id
+  })()
+
   const [sheets, setSheets] = useState<Sheet[]>(initialSheets)
-  const [activeSheetId, setActiveSheetId] = useState<string>(initialSheets[0].id)
+  const [activeSheetId, setActiveSheetId] = useState<string>(initialActiveSheetId)
   
+  const excalidrawAPIRef = useRef<any>(null)
+
   // UI states for renaming and context menus
   const [renamingSheetId, setRenamingSheetId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState<string>('')
@@ -77,6 +101,60 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
     currentAppStateRef.current = JSON.parse(currentActive.appState || '{}')
     currentFilesRef.current = JSON.parse(currentActive.files || '{}')
   }, [activeSheetId])
+
+  // Automatically switch active sheet if URL changes and contains an element ID belonging to another sheet
+  useEffect(() => {
+    const handleUrlCheck = () => {
+      const searchParams = new URLSearchParams(window.location.search)
+      const elementId = searchParams.get('element')
+      console.log('handleUrlCheck triggered. Element ID in URL:', elementId)
+      if (elementId) {
+        const sheetWithElement = sheets.find(s => {
+          try {
+            const elements = JSON.parse(s.elements || '[]')
+            return elements.some((el: any) => el.id === elementId)
+          } catch (e) {
+            return false
+          }
+        })
+        
+        if (sheetWithElement) {
+          console.log('handleUrlCheck found sheet containing element:', sheetWithElement.name)
+          if (sheetWithElement.id !== activeSheetId) {
+            console.log('handleUrlCheck switching to different sheet:', sheetWithElement.id)
+            switchSheet(sheetWithElement.id, false)
+          } else {
+            console.log('handleUrlCheck same sheet: zooming to element')
+            const targetElement = currentElementsRef.current.find(el => el.id === elementId)
+            if (targetElement && excalidrawAPIRef.current) {
+              excalidrawAPIRef.current.setViewport({
+                target: targetElement,
+                fit: 'scale-down',
+                animation: true
+              })
+            } else if (excalidrawAPIRef.current) {
+              // Fallback to URL string if element object not found
+              excalidrawAPIRef.current.setViewport({
+                target: window.location.href,
+                fit: 'scale-down',
+                animation: true
+              })
+            }
+          }
+        } else {
+          console.warn('handleUrlCheck: No sheet containing element', elementId, 'found.')
+        }
+      }
+    }
+
+    window.addEventListener('popstate', handleUrlCheck)
+    window.addEventListener('hashchange', handleUrlCheck)
+    
+    return () => {
+      window.removeEventListener('popstate', handleUrlCheck)
+      window.removeEventListener('hashchange', handleUrlCheck)
+    }
+  }, [sheets, activeSheetId])
 
   useEffect(() => {
     return () => {
@@ -175,11 +253,20 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
     }, 2000) // 2s debounce
   }
 
-  const switchSheet = async (targetId: string) => {
+  const switchSheet = async (targetId: string, clearElementFromUrl = true) => {
     if (targetId === activeSheetId) return
 
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
+    }
+
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      if (clearElementFromUrl) {
+        url.searchParams.delete('element')
+      }
+      url.searchParams.set('sheetId', targetId)
+      window.history.pushState({}, '', url.pathname + url.search)
     }
 
     const serializedElements = JSON.stringify(currentElementsRef.current)
@@ -223,6 +310,13 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       nextNum++
     }
     const newName = `Sheet ${nextNum}`
+
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('element')
+      url.searchParams.set('sheetId', newId)
+      window.history.pushState({}, '', url.pathname + url.search)
+    }
 
     const newSheet: Sheet = {
       id: newId,
@@ -289,6 +383,13 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       newActiveId = sheets[nextActiveIdx].id
     }
 
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('element')
+      url.searchParams.set('sheetId', newActiveId)
+      window.history.pushState({}, '', url.pathname + url.search)
+    }
+
     const serializedElements = JSON.stringify(currentElementsRef.current)
     const cleanAppState = {
       viewBackgroundColor: currentAppStateRef.current.viewBackgroundColor,
@@ -334,6 +435,13 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
     while (sheets.some(s => s.name === newName)) {
       newName = `${baseName} ${nextNum}`
       nextNum++
+    }
+
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href)
+      url.searchParams.delete('element')
+      url.searchParams.set('sheetId', newId)
+      window.history.pushState({}, '', url.pathname + url.search)
     }
 
     const serializedElements = JSON.stringify(currentElementsRef.current)
@@ -502,6 +610,89 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
           initialData={initialData}
           onChange={(elements, appState, files) => {
             triggerSave(elements as any, appState, files)
+          }}
+          onExcalidrawAPI={(api) => {
+            excalidrawAPIRef.current = api
+          }}
+          onLinkOpen={(element, event) => {
+            console.log('onLinkOpen triggered for element link:', element.link)
+            try {
+              const url = new URL(element.link, window.location.origin)
+              const currentUrl = new URL(window.location.href)
+              
+              console.log('Parsed url:', url.toString())
+              console.log('Current url:', currentUrl.toString())
+              console.log('Pathname check:', url.pathname, '===', currentUrl.pathname)
+              
+              if (url.pathname === currentUrl.pathname) {
+                event.preventDefault()
+                console.log('Prevented default navigation')
+                
+                const targetElementId = url.searchParams.get('element')
+                console.log('Target element ID:', targetElementId)
+                
+                if (targetElementId) {
+                  // Update URL in history in-place
+                  window.history.pushState({}, '', url.pathname + url.search)
+                  console.log('Pushed search to history:', url.search)
+                  
+                  let sheetWithElement = sheets.find(s => s.id === url.searchParams.get('sheetId'))
+                  console.log('Found sheet by sheetId param:', sheetWithElement?.name)
+                  
+                  if (!sheetWithElement) {
+                    sheetWithElement = sheets.find(s => {
+                      try {
+                        const elements = JSON.parse(s.elements || '[]')
+                        return elements.some((el: any) => el.id === targetElementId)
+                      } catch (e) {
+                        return false
+                      }
+                    })
+                    console.log('Found sheet by scanning elements:', sheetWithElement?.name)
+                  }
+                  
+                  if (sheetWithElement) {
+                    console.log('Active sheet ID:', activeSheetId, 'Sheet with element ID:', sheetWithElement.id)
+                    if (sheetWithElement.id === activeSheetId) {
+                      console.log('Same sheet - attempting to setViewport')
+                      if (excalidrawAPIRef.current) {
+                        const targetElement = currentElementsRef.current.find(el => el.id === targetElementId)
+                        console.log('Found target element in currentElementsRef:', targetElement ? 'yes' : 'no')
+                        if (targetElement) {
+                          excalidrawAPIRef.current.setViewport({
+                            target: targetElement,
+                            fit: 'scale-down',
+                            animation: true
+                          })
+                        } else {
+                          // Fallback to URL string if element object not found
+                          excalidrawAPIRef.current.setViewport({
+                            target: element.link,
+                            fit: 'scale-down',
+                            animation: true
+                          })
+                        }
+                      } else {
+                        console.warn('excalidrawAPIRef.current is null!')
+                      }
+                    } else {
+                      console.log('Different sheet - switching to sheet:', sheetWithElement.id)
+                      switchSheet(sheetWithElement.id, false)
+                    }
+                  } else {
+                    console.warn('No sheet containing element', targetElementId, 'was found!')
+                  }
+                }
+              }
+            } catch (e) {
+              console.error('Failed to parse hyperlink:', e)
+            }
+          }}
+          generateLinkForSelection={(id, type) => {
+            const url = new URL(window.location.href)
+            url.searchParams.set('element', id)
+            url.searchParams.set('sheetId', activeSheetId)
+            return url.toString()
           }}
         />
       </div>
