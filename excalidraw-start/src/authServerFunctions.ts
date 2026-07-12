@@ -11,6 +11,7 @@ export const getCurrentUserFn = createServerFn({ method: 'GET' }).handler(
 
 export const registerUserFn = createServerFn({ method: 'POST' })
   .validator((data: { username: unknown; password: unknown }) => {
+    console.log({data})
     if (typeof data.username !== 'string' || data.username.trim().length < 3) {
       throw new Error('Username must be at least 3 characters long')
     }
@@ -23,12 +24,15 @@ export const registerUserFn = createServerFn({ method: 'POST' })
     }
   })
   .handler(async ({ data }) => {
-    const existing = await prisma.user.findUnique({
+    console.log("xxxxx")
+    try {
+      const existing = await prisma.user.findUnique({
       where: { username: data.username }
     })
     if (existing) {
       throw new Error('Username is already taken')
     }
+    console.log(existing)
 
     const passwordHash = await bcrypt.hash(data.password, 10)
     const user = await prisma.user.create({
@@ -40,6 +44,10 @@ export const registerUserFn = createServerFn({ method: 'POST' })
 
     await createSession(user.id, user.username)
     return { success: true, username: user.username }
+    } catch (error) {
+      console.log({error})
+    }
+    
   })
 
 export const loginUserFn = createServerFn({ method: 'POST' })

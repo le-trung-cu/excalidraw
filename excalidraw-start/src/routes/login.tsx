@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { createFileRoute, useNavigate, Link } from '@tanstack/react-router'
 import { loginUserFn, registerUserFn, getCurrentUserFn } from '../authServerFunctions'
 
@@ -11,27 +11,24 @@ export const Route = createFileRoute('/login')({
     } catch {
       return { user: null }
     }
-  },
-  beforeLoad: ({ context, loaderData }) => {
-    // If user is already logged in, redirect them to index
-    if (loaderData?.user) {
-      throw navigate({ to: '/' })
-    }
   }
 })
 
-// Quick polyfill for throw navigate in beforeLoad
-import { redirect } from '@tanstack/react-router'
-const navigate = (opts: { to: string }) => redirect(opts)
-
 function Login() {
+  const { user } = Route.useLoaderData()
   const [isRegister, setIsRegister] = useState(false)
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
-  const routerNavigate = useNavigate()
+
+  // Redirect to dashboard if user is already logged in
+  useEffect(() => {
+    if (user) {
+      window.location.href = '/'
+    }
+  }, [user])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -46,7 +43,7 @@ function Login() {
       setError('Passwords do not match')
       return
     }
-
+    console.log({username, password})
     setIsLoading(true)
     try {
       if (isRegister) {
@@ -55,9 +52,8 @@ function Login() {
         await loginUserFn({ data: { username, password } })
       }
       
-      // Force refresh of the router to refresh session context in root loader
-      await routerNavigate({ to: '/', replace: true })
-      window.location.reload()
+      // Perform full redirect to load new session cookies
+      window.location.href = '/'
     } catch (err: any) {
       setError(err?.message || 'Something went wrong. Please try again.')
     } finally {
