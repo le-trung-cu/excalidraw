@@ -96,7 +96,7 @@ function Dashboard() {
           Welcome back, {user.username}!
         </h1>
         <p className="mb-8 max-w-xl text-sm text-[var(--sea-ink-soft)] sm:text-base">
-          Create notebooks and draw sketches using the interactive canvas. Your handwritings and drawings are stored safely in your SQLite database.
+          Create notebooks and draw sketches using the interactive canvas. Your handwritings and drawings are stored safely in your PostgreSQL database.
         </p>
 
         {error && (

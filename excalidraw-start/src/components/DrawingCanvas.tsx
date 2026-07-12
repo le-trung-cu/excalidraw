@@ -640,6 +640,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
           }}
           onLinkOpen={(element, event) => {
             console.log('onLinkOpen triggered for element link:', element.link)
+            if (!element.link) return
             try {
               const url = new URL(element.link, window.location.origin)
               const currentUrl = new URL(window.location.href)
@@ -712,7 +713,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
               console.error('Failed to parse hyperlink:', e)
             }
           }}
-          generateLinkForSelection={(id, type) => {
+          generateLinkForSelection={(id, _type) => {
             const url = new URL(window.location.href)
             url.searchParams.set('element', id)
             url.searchParams.set('sheetId', activeSheetId)

@@ -28,3 +28,4 @@ html
 meta*.json
 .claude
 excalidraw-start/dev.db
+*.db

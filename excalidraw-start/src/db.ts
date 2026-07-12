@@ -1,11 +1,17 @@
 import { PrismaClient } from '@prisma/client'
-import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3'
+import { PrismaPg } from '@prisma/adapter-pg'
+import pg from 'pg'
 
-// Conforming to Prisma 7 SQLite adapter constructor which manages DB instantiation internally
-const dbUrl = process.env.DATABASE_URL || 'file:./prisma/dev.db'
+const connectionString = process.env.DATABASE_URL
 
-const adapter = new PrismaBetterSqlite3({
-  url: dbUrl
+if (!connectionString) {
+  throw new Error('DATABASE_URL is not set')
+}
+
+const pool = new pg.Pool({
+  connectionString
 })
+
+const adapter = new PrismaPg(pool)
 
 export const prisma = new PrismaClient({ adapter })
