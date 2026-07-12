@@ -15,9 +15,6 @@ interface DrawingCanvasProps {
   drawing: {
     id: string
     title: string
-    elements: string
-    appState: string
-    files: string
     sheets?: string
   }
 }
@@ -26,7 +23,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
 
-  // Initialize sheets array with legacy drawing fallback
+  // Initialize sheets array
   const initialSheets = (() => {
     try {
       const parsed = JSON.parse(drawing.sheets || '[]')
@@ -40,9 +37,9 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       {
         id: 'default',
         name: 'Sheet 1',
-        elements: drawing.elements || '[]',
-        appState: drawing.appState || '{}',
-        files: drawing.files || '{}'
+        elements: '[]',
+        appState: '{}',
+        files: '{}'
       }
     ]
   })()
@@ -194,10 +191,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       await saveDrawingFn({
         data: {
           id: drawing.id,
-          sheets: serializedSheets,
-          elements: activeSheetData.elements || '[]',
-          appState: activeSheetData.appState || '{}',
-          files: activeSheetData.files || '{}'
+          sheets: serializedSheets
         }
       })
       lastSavedSheetsRef.current = serializedSheets

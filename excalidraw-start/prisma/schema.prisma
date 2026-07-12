@@ -23,9 +23,6 @@ model User {
 model Drawing {
   id        String   @id @default(cuid())
   title     String   @default("Untitled")
-  elements  String   // Storing JSON stringified ExcalidrawElement[]
-  appState  String   // Storing JSON stringified AppState
-  files     String   @default("{}") // Storing JSON stringified BinaryFiles map
   sheets    String   @default("[]") // Storing JSON stringified Sheet[] array
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
