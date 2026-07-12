@@ -124,7 +124,7 @@ export const deleteDrawingFn = createServerFn({ method: 'POST' })
   })
 
 export const saveDrawingFn = createServerFn({ method: 'POST' })
-  .validator((data: { id: unknown; elements: unknown; appState: unknown; files?: unknown }) => {
+  .validator((data: { id: unknown; elements: unknown; appState: unknown; files?: unknown; sheets?: unknown }) => {
     if (typeof data.id !== 'string' || !data.id) {
       throw new Error('Drawing ID is required')
     }
@@ -137,11 +137,15 @@ export const saveDrawingFn = createServerFn({ method: 'POST' })
     if (data.files !== undefined && typeof data.files !== 'string') {
       throw new Error('Files must be a serialized JSON string')
     }
+    if (data.sheets !== undefined && typeof data.sheets !== 'string') {
+      throw new Error('Sheets must be a serialized JSON string')
+    }
     return {
       id: data.id,
       elements: data.elements,
       appState: data.appState,
-      files: data.files || '{}'
+      files: data.files || '{}',
+      sheets: data.sheets || '[]'
     }
   })
   .handler(async ({ data }) => {
@@ -161,6 +165,7 @@ export const saveDrawingFn = createServerFn({ method: 'POST' })
         elements: data.elements,
         appState: data.appState,
         files: data.files,
+        sheets: data.sheets,
         updatedAt: new Date()
       }
     })

@@ -3,6 +3,14 @@ import { Excalidraw } from '@excalidraw/excalidraw'
 import { saveDrawingFn } from '../drawingServerFunctions'
 import { Link } from '@tanstack/react-router'
 
+interface Sheet {
+  id: string
+  name: string
+  elements: string
+  appState: string
+  files: string
+}
+
 interface DrawingCanvasProps {
   drawing: {
     id: string
@@ -10,23 +18,117 @@ interface DrawingCanvasProps {
     elements: string
     appState: string
     files: string
+    sheets?: string
   }
 }
 
 export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error'>('saved')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  // Initialize sheets array with legacy drawing fallback
+  const initialSheets = (() => {
+    try {
+      const parsed = JSON.parse(drawing.sheets || '[]')
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed
+      }
+    } catch (e) {
+      console.error('Failed to parse sheets:', e)
+    }
+    return [
+      {
+        id: 'default',
+        name: 'Sheet 1',
+        elements: drawing.elements || '[]',
+        appState: drawing.appState || '{}',
+        files: drawing.files || '{}'
+      }
+    ]
+  })()
+
+  const [sheets, setSheets] = useState<Sheet[]>(initialSheets)
+  const [activeSheetId, setActiveSheetId] = useState<string>(initialSheets[0].id)
   
+  // UI states for renaming and context menus
+  const [renamingSheetId, setRenamingSheetId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState<string>('')
+  const [activeMenuSheetId, setActiveMenuSheetId] = useState<string | null>(null)
+
+  const activeSheet = sheets.find(s => s.id === activeSheetId) || sheets[0]
+
+  // Track current canvas state in refs to avoid frequent state updates during drawing
+  const currentElementsRef = useRef<any[]>(JSON.parse(activeSheet.elements || '[]'))
+  const currentAppStateRef = useRef<any>(JSON.parse(activeSheet.appState || '{}'))
+  const currentFilesRef = useRef<any>(JSON.parse(activeSheet.files || '{}'))
+
   // Track previous save state in refs to avoid loops
-  const lastSavedElementsRef = useRef(drawing.elements)
-  const lastSavedAppStateRef = useRef(drawing.appState)
-  const lastSavedFilesRef = useRef(drawing.files)
+  const lastSavedSheetsRef = useRef(JSON.stringify(initialSheets))
+  const lastSavedElementsRef = useRef(activeSheet.elements)
+  const lastSavedAppStateRef = useRef(activeSheet.appState)
+  const lastSavedFilesRef = useRef(activeSheet.files)
 
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null)
 
+  // Sync refs when active sheet changes
+  useEffect(() => {
+    const currentActive = sheets.find(s => s.id === activeSheetId) || sheets[0]
+    currentElementsRef.current = JSON.parse(currentActive.elements || '[]')
+    currentAppStateRef.current = JSON.parse(currentActive.appState || '{}')
+    currentFilesRef.current = JSON.parse(currentActive.files || '{}')
+  }, [activeSheetId])
+
+  useEffect(() => {
+    return () => {
+      if (saveTimeoutRef.current) {
+        clearTimeout(saveTimeoutRef.current)
+      }
+    }
+  }, [])
+
+  const triggerDbSave = async (currentSheets: Sheet[], currentActiveId: string, force = false) => {
+    const activeSheetData = currentSheets.find(s => s.id === currentActiveId) || currentSheets[0]
+    const serializedSheets = JSON.stringify(currentSheets)
+
+    if (
+      !force &&
+      serializedSheets === lastSavedSheetsRef.current &&
+      activeSheetData.elements === lastSavedElementsRef.current &&
+      activeSheetData.appState === lastSavedAppStateRef.current &&
+      activeSheetData.files === lastSavedFilesRef.current
+    ) {
+      return // No changes to save
+    }
+
+    setSaveStatus('saving')
+
+    try {
+      await saveDrawingFn({
+        data: {
+          id: drawing.id,
+          sheets: serializedSheets,
+          elements: activeSheetData.elements || '[]',
+          appState: activeSheetData.appState || '{}',
+          files: activeSheetData.files || '{}'
+        }
+      })
+      lastSavedSheetsRef.current = serializedSheets
+      lastSavedElementsRef.current = activeSheetData.elements || '[]'
+      lastSavedAppStateRef.current = activeSheetData.appState || '{}'
+      lastSavedFilesRef.current = activeSheetData.files || '{}'
+      setSaveStatus('saved')
+    } catch (err: any) {
+      setSaveStatus('error')
+      setErrorMsg(err?.message || 'Failed to save changes')
+    }
+  }
+
   const triggerSave = (elements: any[], appState: any, files: any) => {
-    // Excalidraw onChange triggers on cursor changes etc, so we filter elements to save
-    const activeElements = elements.filter(el => !el.isDeleted)
+    // Keep refs updated with current state
+    currentElementsRef.current = elements
+    currentAppStateRef.current = appState
+    currentFilesRef.current = files
+
     const serializedElements = JSON.stringify(elements)
     
     // We only save relevant appState properties to avoid writing on every cursor mouse movement
@@ -35,6 +137,9 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       zenModeEnabled: appState.zenModeEnabled,
       gridSize: appState.gridSize,
       theme: appState.theme,
+      zoom: appState.zoom,
+      scrollX: appState.scrollX,
+      scrollY: appState.scrollY,
     }
     const serializedAppState = JSON.stringify(cleanAppState)
     const serializedFiles = JSON.stringify(files || {})
@@ -48,52 +153,314 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       return // No changes to save
     }
 
-    setSaveStatus('saving')
-
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current)
     }
 
     saveTimeoutRef.current = setTimeout(async () => {
-      try {
-        await saveDrawingFn({
-          data: {
-            id: drawing.id,
+      const updatedSheets = sheets.map(s => {
+        if (s.id === activeSheetId) {
+          return {
+            ...s,
             elements: serializedElements,
             appState: serializedAppState,
             files: serializedFiles
           }
-        })
-        lastSavedElementsRef.current = serializedElements
-        lastSavedAppStateRef.current = serializedAppState
-        lastSavedFilesRef.current = serializedFiles
-        setSaveStatus('saved')
-      } catch (err: any) {
-        setSaveStatus('error')
-        setErrorMsg(err?.message || 'Failed to save changes')
-      }
+        }
+        return s
+      })
+
+      setSheets(updatedSheets)
+      await triggerDbSave(updatedSheets, activeSheetId)
     }, 2000) // 2s debounce
   }
 
-  useEffect(() => {
-    return () => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current)
-      }
-    }
-  }, [])
+  const switchSheet = async (targetId: string) => {
+    if (targetId === activeSheetId) return
 
-  // Initial data parsed from database
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
+    const serializedElements = JSON.stringify(currentElementsRef.current)
+    const cleanAppState = {
+      viewBackgroundColor: currentAppStateRef.current.viewBackgroundColor,
+      zenModeEnabled: currentAppStateRef.current.zenModeEnabled,
+      gridSize: currentAppStateRef.current.gridSize,
+      theme: currentAppStateRef.current.theme,
+      zoom: currentAppStateRef.current.zoom,
+      scrollX: currentAppStateRef.current.scrollX,
+      scrollY: currentAppStateRef.current.scrollY,
+    }
+    const serializedAppState = JSON.stringify(cleanAppState)
+    const serializedFiles = JSON.stringify(currentFilesRef.current || {})
+
+    const updatedSheets = sheets.map(s => {
+      if (s.id === activeSheetId) {
+        return {
+          ...s,
+          elements: serializedElements,
+          appState: serializedAppState,
+          files: serializedFiles
+        }
+      }
+      return s
+    })
+
+    setSheets(updatedSheets)
+    setActiveSheetId(targetId)
+    await triggerDbSave(updatedSheets, targetId, true)
+  }
+
+  const addSheet = async () => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
+    const newId = Math.random().toString(36).substring(2, 9)
+    let nextNum = 1
+    while (sheets.some(s => s.name === `Sheet ${nextNum}`)) {
+      nextNum++
+    }
+    const newName = `Sheet ${nextNum}`
+
+    const newSheet: Sheet = {
+      id: newId,
+      name: newName,
+      elements: '[]',
+      appState: JSON.stringify({
+        viewBackgroundColor: '#ffffff',
+        zenModeEnabled: false,
+        gridSize: null,
+        theme: currentAppStateRef.current.theme || 'light',
+      }),
+      files: '{}'
+    }
+
+    const serializedElements = JSON.stringify(currentElementsRef.current)
+    const cleanAppState = {
+      viewBackgroundColor: currentAppStateRef.current.viewBackgroundColor,
+      zenModeEnabled: currentAppStateRef.current.zenModeEnabled,
+      gridSize: currentAppStateRef.current.gridSize,
+      theme: currentAppStateRef.current.theme,
+      zoom: currentAppStateRef.current.zoom,
+      scrollX: currentAppStateRef.current.scrollX,
+      scrollY: currentAppStateRef.current.scrollY,
+    }
+    const serializedAppState = JSON.stringify(cleanAppState)
+    const serializedFiles = JSON.stringify(currentFilesRef.current || {})
+
+    const updatedSheets = sheets.map(s => {
+      if (s.id === activeSheetId) {
+        return {
+          ...s,
+          elements: serializedElements,
+          appState: serializedAppState,
+          files: serializedFiles
+        }
+      }
+      return s
+    })
+
+    const finalSheets = [...updatedSheets, newSheet]
+    setSheets(finalSheets)
+    setActiveSheetId(newId)
+    await triggerDbSave(finalSheets, newId, true)
+  }
+
+  const deleteSheet = async (sheetId: string) => {
+    if (sheets.length <= 1) return
+
+    const sheetToDelete = sheets.find(s => s.id === sheetId)
+    if (!sheetToDelete) return
+
+    if (!window.confirm(`Are you sure you want to delete "${sheetToDelete.name}"?`)) {
+      return
+    }
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
+    let newActiveId = activeSheetId
+    if (sheetId === activeSheetId) {
+      const idx = sheets.findIndex(s => s.id === sheetId)
+      const nextActiveIdx = idx === 0 ? 1 : idx - 1
+      newActiveId = sheets[nextActiveIdx].id
+    }
+
+    const serializedElements = JSON.stringify(currentElementsRef.current)
+    const cleanAppState = {
+      viewBackgroundColor: currentAppStateRef.current.viewBackgroundColor,
+      zenModeEnabled: currentAppStateRef.current.zenModeEnabled,
+      gridSize: currentAppStateRef.current.gridSize,
+      theme: currentAppStateRef.current.theme,
+      zoom: currentAppStateRef.current.zoom,
+      scrollX: currentAppStateRef.current.scrollX,
+      scrollY: currentAppStateRef.current.scrollY,
+    }
+    const serializedAppState = JSON.stringify(cleanAppState)
+    const serializedFiles = JSON.stringify(currentFilesRef.current || {})
+
+    const updatedSheets = sheets.map(s => {
+      if (s.id === activeSheetId && s.id !== sheetId) {
+        return {
+          ...s,
+          elements: serializedElements,
+          appState: serializedAppState,
+          files: serializedFiles
+        }
+      }
+      return s
+    }).filter(s => s.id !== sheetId)
+
+    setSheets(updatedSheets)
+    setActiveSheetId(newActiveId)
+    await triggerDbSave(updatedSheets, newActiveId, true)
+  }
+
+  const duplicateSheet = async (sheetId: string) => {
+    const sheetToDuplicate = sheets.find(s => s.id === sheetId)
+    if (!sheetToDuplicate) return
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
+    const newId = Math.random().toString(36).substring(2, 9)
+    let nextNum = 1
+    const baseName = `${sheetToDuplicate.name} (Copy)`
+    let newName = baseName
+    while (sheets.some(s => s.name === newName)) {
+      newName = `${baseName} ${nextNum}`
+      nextNum++
+    }
+
+    const serializedElements = JSON.stringify(currentElementsRef.current)
+    const cleanAppState = {
+      viewBackgroundColor: currentAppStateRef.current.viewBackgroundColor,
+      zenModeEnabled: currentAppStateRef.current.zenModeEnabled,
+      gridSize: currentAppStateRef.current.gridSize,
+      theme: currentAppStateRef.current.theme,
+      zoom: currentAppStateRef.current.zoom,
+      scrollX: currentAppStateRef.current.scrollX,
+      scrollY: currentAppStateRef.current.scrollY,
+    }
+    const serializedAppState = JSON.stringify(cleanAppState)
+    const serializedFiles = JSON.stringify(currentFilesRef.current || {})
+
+    const updatedSheets = sheets.map(s => {
+      if (s.id === activeSheetId) {
+        return {
+          ...s,
+          elements: serializedElements,
+          appState: serializedAppState,
+          files: serializedFiles
+        }
+      }
+      return s
+    })
+
+    const sourceSheet = updatedSheets.find(s => s.id === sheetId)!
+    const newSheet: Sheet = {
+      id: newId,
+      name: newName,
+      elements: sourceSheet.elements,
+      appState: sourceSheet.appState,
+      files: sourceSheet.files
+    }
+
+    const targetIndex = updatedSheets.findIndex(s => s.id === sheetId)
+    const finalSheets = [...updatedSheets]
+    finalSheets.splice(targetIndex + 1, 0, newSheet)
+
+    setSheets(finalSheets)
+    setActiveSheetId(newId)
+    await triggerDbSave(finalSheets, newId, true)
+  }
+
+  const moveSheet = async (sheetId: string, direction: 'left' | 'right') => {
+    const index = sheets.findIndex(s => s.id === sheetId)
+    if (index === -1) return
+    if (direction === 'left' && index === 0) return
+    if (direction === 'right' && index === sheets.length - 1) return
+
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current)
+    }
+
+    const serializedElements = JSON.stringify(currentElementsRef.current)
+    const cleanAppState = {
+      viewBackgroundColor: currentAppStateRef.current.viewBackgroundColor,
+      zenModeEnabled: currentAppStateRef.current.zenModeEnabled,
+      gridSize: currentAppStateRef.current.gridSize,
+      theme: currentAppStateRef.current.theme,
+      zoom: currentAppStateRef.current.zoom,
+      scrollX: currentAppStateRef.current.scrollX,
+      scrollY: currentAppStateRef.current.scrollY,
+    }
+    const serializedAppState = JSON.stringify(cleanAppState)
+    const serializedFiles = JSON.stringify(currentFilesRef.current || {})
+
+    const updatedSheets = sheets.map(s => {
+      if (s.id === activeSheetId) {
+        return {
+          ...s,
+          elements: serializedElements,
+          appState: serializedAppState,
+          files: serializedFiles
+        }
+      }
+      return s
+    })
+
+    const targetIndex = direction === 'left' ? index - 1 : index + 1
+    const newSheets = [...updatedSheets]
+
+    const temp = newSheets[index]
+    newSheets[index] = newSheets[targetIndex]
+    newSheets[targetIndex] = temp
+
+    setSheets(newSheets)
+    await triggerDbSave(newSheets, activeSheetId, true)
+  }
+
+  const completeRename = async (sheetId: string) => {
+    const trimmed = renameValue.trim()
+    if (!trimmed) {
+      setRenamingSheetId(null)
+      return
+    }
+
+    const isDuplicate = sheets.some(s => s.id !== sheetId && s.name.toLowerCase() === trimmed.toLowerCase())
+    if (isDuplicate) {
+      alert('A sheet with this name already exists.')
+      setRenamingSheetId(null)
+      return
+    }
+
+    const updatedSheets = sheets.map(s => {
+      if (s.id === sheetId) {
+        return { ...s, name: trimmed }
+      }
+      return s
+    })
+
+    setSheets(updatedSheets)
+    setRenamingSheetId(null)
+    await triggerDbSave(updatedSheets, activeSheetId, true)
+  }
+
   const initialData = {
-    elements: JSON.parse(drawing.elements || '[]'),
-    appState: JSON.parse(drawing.appState || '{}'),
-    files: JSON.parse(drawing.files || '{}')
+    elements: JSON.parse(activeSheet.elements || '[]'),
+    appState: JSON.parse(activeSheet.appState || '{}'),
+    files: JSON.parse(activeSheet.files || '{}')
   }
 
   return (
-    <div className="w-full h-full flex flex-col relative">
+    <div className="w-full h-[calc(100vh-64px)] flex flex-col relative overflow-hidden">
       {/* Top Status Bar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-[var(--header-bg)] border-b border-[var(--line)] z-10 backdrop-blur-md">
+      <div className="flex items-center justify-between px-4 py-3 bg-[var(--header-bg)] border-b border-[var(--line)] z-10 backdrop-blur-md h-[56px] flex-shrink-0">
         <div className="flex items-center gap-3">
           <Link
             to="/"
@@ -108,7 +475,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
 
         <div className="flex items-center gap-2">
           {saveStatus === 'saved' && (
-            <span className="inline-flex items-center gap-1 text-xs text-green-600 font-semibold">
+            <span className="inline-flex items-center gap-1 text-xs text-green-600 font-semibold dark:text-green-400">
               <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
               Saved to DB
             </span>
@@ -120,7 +487,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
             </span>
           )}
           {saveStatus === 'error' && (
-            <span className="inline-flex items-center gap-1 text-xs text-red-600 font-semibold" title={errorMsg || ''}>
+            <span className="inline-flex items-center gap-1 text-xs text-red-600 font-semibold dark:text-red-400" title={errorMsg || ''}>
               <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
               Save error
             </span>
@@ -129,13 +496,182 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       </div>
 
       {/* Excalidraw Canvas Area */}
-      <div className="flex-grow w-full h-full relative" style={{ height: 'calc(100vh - 120px)' }}>
+      <div className="flex-grow w-full relative" style={{ height: 'calc(100vh - 64px - 56px - 48px)' }}>
         <Excalidraw
+          key={activeSheetId}
           initialData={initialData}
           onChange={(elements, appState, files) => {
             triggerSave(elements as any, appState, files)
           }}
         />
+      </div>
+
+      {/* Bottom Sheet Tab Bar */}
+      <div className="h-[48px] w-full bg-[var(--header-bg)] border-t border-[var(--line)] flex items-center px-4 justify-between gap-4 select-none z-10 flex-shrink-0">
+        <div 
+          className="flex items-center gap-1.5 overflow-x-auto flex-grow h-full py-1.5"
+          style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        >
+          {sheets.map((s, idx) => {
+            const isActive = s.id === activeSheetId
+            return (
+              <div
+                key={s.id}
+                className={`relative flex items-center gap-1.5 h-[32px] px-3 rounded-lg border text-xs font-bold transition-all flex-shrink-0 ${
+                  isActive
+                    ? 'bg-[var(--bg-base)] border-[var(--lagoon)] text-[var(--sea-ink)] shadow-sm'
+                    : 'bg-[var(--chip-bg)] border-[var(--line)] text-[var(--sea-ink-soft)] hover:bg-[var(--link-bg-hover)]'
+                }`}
+              >
+                {renamingSheetId === s.id ? (
+                  <input
+                    type="text"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') completeRename(s.id)
+                      if (e.key === 'Escape') setRenamingSheetId(null)
+                    }}
+                    onBlur={() => completeRename(s.id)}
+                    className="w-20 bg-transparent outline-none border-b border-[var(--lagoon)] text-[var(--sea-ink)] px-0.5 py-0 font-bold"
+                    autoFocus
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <span
+                    onDoubleClick={() => {
+                      setRenamingSheetId(s.id)
+                      setRenameValue(s.name)
+                    }}
+                    onClick={() => switchSheet(s.id)}
+                    className="cursor-pointer py-1 min-w-[45px] max-w-[120px] truncate"
+                    title="Double click to rename"
+                  >
+                    {s.name}
+                  </span>
+                )}
+
+                {/* Tab actions menu toggle */}
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setActiveMenuSheetId(s.id === activeMenuSheetId ? null : s.id)
+                  }}
+                  className="p-1 rounded hover:bg-slate-200 dark:hover:bg-zinc-800 text-[var(--sea-ink-soft)] cursor-pointer"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M6 9l6 6 6-6"/>
+                  </svg>
+                </button>
+
+                {/* Dropdown context menu */}
+                {activeMenuSheetId === s.id && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40 cursor-default"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setActiveMenuSheetId(null)
+                      }}
+                    />
+                    <div className="absolute bottom-[36px] left-0 z-50 min-w-[150px] py-1.5 bg-[var(--surface-strong)] border border-[var(--line)] rounded-xl shadow-xl backdrop-blur-md text-xs text-[var(--sea-ink)]">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setRenamingSheetId(s.id)
+                          setRenameValue(s.name)
+                          setActiveMenuSheetId(null)
+                        }}
+                        className="flex items-center gap-2 w-full text-left px-4 py-2 hover:bg-[var(--link-bg-hover)] font-bold cursor-pointer"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M12 20h9"/>
+                          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+                        </svg>
+                        Rename
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          duplicateSheet(s.id)
+                          setActiveMenuSheetId(null)
+                        }}
+                        className="flex items-center gap-2 w-full text-left px-4 py-2 hover:bg-[var(--link-bg-hover)] font-bold cursor-pointer"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                        </svg>
+                        Duplicate
+                      </button>
+                      {idx > 0 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            moveSheet(s.id, 'left')
+                            setActiveMenuSheetId(null)
+                          }}
+                          className="flex items-center gap-2 w-full text-left px-4 py-2 hover:bg-[var(--link-bg-hover)] font-bold cursor-pointer"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="19" y1="12" x2="5" y2="12"/>
+                            <polyline points="12 19 5 12 12 5"/>
+                          </svg>
+                          Move Left
+                        </button>
+                      )}
+                      {idx < sheets.length - 1 && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            moveSheet(s.id, 'right')
+                            setActiveMenuSheetId(null)
+                          }}
+                          className="flex items-center gap-2 w-full text-left px-4 py-2 hover:bg-[var(--link-bg-hover)] font-bold cursor-pointer"
+                        >
+                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="5" y1="12" x2="19" y2="12"/>
+                            <polyline points="12 5 19 12 12 19"/>
+                          </svg>
+                          Move Right
+                        </button>
+                      )}
+                      <div className="h-[1px] bg-[var(--line)] my-1.5" />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          deleteSheet(s.id)
+                          setActiveMenuSheetId(null)
+                        }}
+                        disabled={sheets.length <= 1}
+                        className="flex items-center gap-2 w-full text-left px-4 py-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 disabled:opacity-40 disabled:hover:bg-transparent font-bold cursor-pointer"
+                      >
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <polyline points="3 6 5 6 21 6"/>
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+                          <line x1="10" y1="11" x2="10" y2="17"/>
+                          <line x1="14" y1="11" x2="14" y2="17"/>
+                        </svg>
+                        Delete
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )
+          })}
+
+          <button
+            onClick={addSheet}
+            className="p-1.5 rounded-lg hover:bg-[var(--link-bg-hover)] text-[var(--sea-ink)] border border-[var(--line)] flex items-center justify-center cursor-pointer transition-all active:scale-95 bg-[var(--chip-bg)] h-[32px] w-[32px] flex-shrink-0"
+            title="Add new sheet"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+          </button>
+        </div>
       </div>
     </div>
   )
