@@ -5,6 +5,7 @@ import tailwindcss from '@tailwindcss/vite'
 import svgrPlugin from 'vite-plugin-svgr'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { nitro } from 'nitro/vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -69,6 +70,7 @@ const config = defineConfig({
         installDevServerMiddleware: true,
       },
     }),
+    nitro(),
     viteReact(),
     svgrPlugin(),
   ],
