@@ -168,6 +168,14 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
     const activeSheetData = currentSheets.find(s => s.id === currentActiveId) || currentSheets[0]
     const serializedSheets = JSON.stringify(currentSheets)
 
+    console.log('triggerDbSave called. Force:', force)
+    console.log('triggerDbSave checks:',
+      'Sheets match:', serializedSheets === lastSavedSheetsRef.current,
+      'Elements match:', activeSheetData.elements === lastSavedElementsRef.current,
+      'AppState match:', activeSheetData.appState === lastSavedAppStateRef.current,
+      'Files match:', activeSheetData.files === lastSavedFilesRef.current
+    )
+
     if (
       !force &&
       serializedSheets === lastSavedSheetsRef.current &&
@@ -175,9 +183,11 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       activeSheetData.appState === lastSavedAppStateRef.current &&
       activeSheetData.files === lastSavedFilesRef.current
     ) {
+      console.log('triggerDbSave: No DB changes, returning')
       return // No changes to save
     }
 
+    console.log('triggerDbSave: Proceeding with DB save')
     setSaveStatus('saving')
 
     try {
@@ -195,9 +205,11 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
       lastSavedAppStateRef.current = activeSheetData.appState || '{}'
       lastSavedFilesRef.current = activeSheetData.files || '{}'
       setSaveStatus('saved')
+      console.log('triggerDbSave: Save successful')
     } catch (err: any) {
       setSaveStatus('error')
       setErrorMsg(err?.message || 'Failed to save changes')
+      console.error('triggerDbSave: Save failed:', err)
     }
   }
 
@@ -222,20 +234,31 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
     const serializedAppState = JSON.stringify(cleanAppState)
     const serializedFiles = JSON.stringify(files || {})
 
+    console.log('triggerSave called. Elements count:', elements.length)
+    console.log('Comparison check:', 
+      'Elements match:', serializedElements === lastSavedElementsRef.current,
+      'AppState match:', serializedAppState === lastSavedAppStateRef.current,
+      'Files match:', serializedFiles === lastSavedFilesRef.current
+    )
+
     // Check if there are actual semantic changes compared to last saved
     if (
       serializedElements === lastSavedElementsRef.current &&
       serializedAppState === lastSavedAppStateRef.current &&
       serializedFiles === lastSavedFilesRef.current
     ) {
+      console.log('triggerSave: No changes to save, returning early')
       return // No changes to save
     }
 
     if (saveTimeoutRef.current) {
+      console.log('triggerSave: Clearing pending save timeout')
       clearTimeout(saveTimeoutRef.current)
     }
 
+    console.log('triggerSave: Scheduling new save timeout in 2s')
     saveTimeoutRef.current = setTimeout(async () => {
+      console.log('Timeout fired. Processing sheets save...')
       const updatedSheets = sheets.map(s => {
         if (s.id === activeSheetId) {
           return {
@@ -248,6 +271,7 @@ export default function DrawingCanvas({ drawing }: DrawingCanvasProps) {
         return s
       })
 
+      console.log('setSheets called with updated sheets')
       setSheets(updatedSheets)
       await triggerDbSave(updatedSheets, activeSheetId)
     }, 2000) // 2s debounce
